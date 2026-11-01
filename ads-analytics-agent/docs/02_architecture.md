@@ -17,9 +17,9 @@ flowchart LR
         CFG[設定<br/>KPI・目標・運用ルール]
     end
 
-    subgraph Pipeline[バッチパイプライン Cloud Run Jobs]
+    subgraph Pipeline[バッチパイプライン GitHub Actions]
         ING[1. Ingest<br/>Connector]
-        STG[(2. Storage<br/>BigQuery or DuckDB)]
+        STG[(2. Storage<br/>データ用スプレッドシート<br/>+ DuckDB で計算)]
         MART[3. Transform<br/>統合・派生指標]
         ANA[4. Analyze<br/>期間比較・異常検知<br/>寄与度・効率・機会]
         INS[5. Insight Agent<br/>Claude]
@@ -28,8 +28,8 @@ flowchart LR
     end
 
     subgraph Delivery[配信]
-        SLK[Slack]
-        DOC[Google ドキュメント<br/>/ スプレッドシート]
+        SLK[スライド<br/>Phase 2]
+        DOC[レポート用<br/>スプレッドシート]
     end
 
     subgraph Chat[対話 Phase 2]
@@ -62,7 +62,7 @@ sequenceDiagram
     participant A as Analyzer
     participant C as Claude (Insight)
     participant V as Validator
-    participant O as Slack/Docs
+    participant O as Sheets/Slides
 
     S->>I: 月曜 7:00 起動（対象期間 = 先週）
     I->>I: GA4 / Ads を取得（直近 3 日は再取得）
@@ -82,21 +82,21 @@ sequenceDiagram
 
 ## 4. 技術スタック
 
-| レイヤ          | 採用技術（推奨）                                                      | 理由 / 代替案                                             |
-| --------------- | --------------------------------------------------------------------- | --------------------------------------------------------- |
-| 言語            | Python 3.12                                                           | Google 公式クライアントとデータ分析ライブラリが揃っている |
-| GA4 取得        | `google-analytics-data`（GA4 Data API v1beta）                        | 代替: GA4 BigQuery エクスポート                           |
-| Google 広告取得 | `google-ads`（公式 Python クライアント、GAQL）                        | 代替: BigQuery Data Transfer Service                      |
-| 保存            | **BigQuery**（本番） / **DuckDB**（ローカル・PoC）                    | 同じ SQL で両方動くよう SQL を ANSI 寄りに書く            |
-| 分析            | pandas、numpy、statsmodels（STL 分解は Phase 2）                      |                                                           |
-| AI              | **Claude Agent SDK（Python）** / Anthropic Messages API               | ツール呼び出し・構造化出力・プロンプトキャッシュ          |
-| モデル          | 週次・日次: `claude-sonnet-5-5`、月次の深掘り: `claude-opus-5-5`      | コストと品質のバランスで設定ファイルから切り替え          |
-| 検証            | pydantic（スキーマ）、独自の数値照合                                  |                                                           |
-| グラフ          | matplotlib / plotly（PNG 出力）                                       |                                                           |
-| 配信            | Slack Web API（`chat.postMessage` + ファイル）、Google Docs/Drive API |                                                           |
-| 実行基盤        | Cloud Run Jobs + Cloud Scheduler                                      | 代替: GitHub Actions の cron、ローカルの cron             |
-| 秘密情報        | Secret Manager（環境変数経由で注入）                                  |                                                           |
-| 監視            | Cloud Logging + 失敗時 Slack 通知                                     |                                                           |
+| レイヤ          | 採用技術（推奨）                                                                            | 理由 / 代替案                                                                                      |
+| --------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| 言語            | Python 3.12                                                                                 | Google 公式クライアントとデータ分析ライブラリが揃っている                                          |
+| GA4 取得        | `google-analytics-data`（GA4 Data API v1beta）                                              | 代替: GA4 BigQuery エクスポート                                                                    |
+| Google 広告取得 | `google-ads`（公式 Python クライアント、GAQL）                                              | 代替: BigQuery Data Transfer Service                                                               |
+| 保存            | **データ用スプレッドシート**（取得データ・示唆ログ）。計算時は DuckDB（メモリ上）に読み込む | BigQuery は未使用。データ量が増えたら Drive 上の Parquet や BigQuery に移せるよう Storage を抽象化 |
+| 分析            | pandas、numpy、statsmodels（STL 分解は Phase 2）                                            |                                                                                                    |
+| AI              | **Claude Agent SDK（Python）** / Anthropic Messages API                                     | ツール呼び出し・構造化出力・プロンプトキャッシュ                                                   |
+| モデル          | 週次・日次: `claude-sonnet-5-5`、月次の深掘り: `claude-opus-5-5`                            | コストと品質のバランスで設定ファイルから切り替え                                                   |
+| 検証            | pydantic（スキーマ）、独自の数値照合                                                        |                                                                                                    |
+| グラフ          | matplotlib / plotly（PNG 出力）                                                             |                                                                                                    |
+| 出力            | Google Sheets API（表・ネイティブグラフ）、Google Slides API（Phase 2）                     | `04_reporting-design.md` 参照                                                                      |
+| 実行基盤        | GitHub Actions（cron）を MVP の既定案とする                                                 | 比較は `05_repository-and-runtime.md`                                                              |
+| 秘密情報        | GitHub Actions Secrets（環境変数経由で注入）                                                | GCP に移す場合は Secret Manager                                                                    |
+| 監視            | Actions の実行ログ ＋ 失敗時のメール通知                                                    |                                                                                                    |
 
 ### データ取得方式の比較
 
@@ -121,7 +121,7 @@ ads-analytics-agent/
 │   │   ├── base.py          # Connector インターフェース
 │   │   ├── ga4.py
 │   │   └── google_ads.py
-│   ├── storage/             # BigQuery / DuckDB アダプタ
+│   ├── storage/             # Sheets / DuckDB アダプタ（将来 Parquet・BigQuery）
 │   ├── transform/           # 結合・派生指標
 │   ├── analysis/
 │   │   ├── period_compare.py
@@ -143,6 +143,8 @@ ads-analytics-agent/
 ```
 
 ## 6. データモデル
+
+BigQuery を使わないため、以下の各テーブルは **データ用スプレッドシートのタブ** として保存する（1 シート 1,000 万セルまで）。容量を抑えるため、検索語句は週単位に集計して保存し、日次の明細は必要なときに API から取り直す。
 
 ### 6.1 取得テーブル（raw）
 
@@ -218,8 +220,8 @@ Claude Agent SDK のカスタムツールとして公開する。すべて読み
 
 ## 9. セキュリティ・運用
 
-- 認証: GA4 はサービスアカウント（プロパティの閲覧者権限）、Google 広告は OAuth リフレッシュトークン ＋ 開発者トークン。すべて Secret Manager
+- 認証: GA4 はサービスアカウント（プロパティの閲覧者権限）、Google 広告は OAuth リフレッシュトークン ＋ 開発者トークン。すべて GitHub Actions Secrets
 - LLM に送るのは集計済み数値とキャンペーン名のみ。個人情報は送らない
-- 失敗時: リトライ → Slack の運用チャンネルに通知（どの段で失敗したか、再実行コマンド）
+- 失敗時: リトライ → メール（または Slack）に通知（どの段で失敗したか、再実行コマンド）
 - 再実行: `ads-agent run weekly --date YYYY-MM-DD` で任意の期間を再生成できる
 - コスト管理: 実行ごとのトークン数を `run_log` に記録。月額の上限を設定ファイルに持ち、超えたら Sonnet のみに切り替える
